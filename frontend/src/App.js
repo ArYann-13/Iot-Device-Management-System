@@ -1,60 +1,40 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState} from 'react';
 import RealTimeMonitor from './components/RealTImeMonitor';
 import Graph from './components/Graph';
-
 import axios from 'axios';
 
 function App() {
   const [showGraph, setShowGraph] = useState(false);
-  const [chartData, setChartData] = useState({ labels: [], datasets: [] });
-  const [ldrChartData, setLdrChartData] = useState({ labels: [], datasets: [] });
+  const [chartData, setChartData] = useState([]);
+ 
+   
+   const fetchRealTimeData = async () => {
+     try {
+       const response = await axios.get('http://localhost:5000/api/latest');
+       const latestData = response.data;
+ 
+       // Ensure that createdAt is valid
+       if (latestData && latestData.createdAt) {
+         setChartData((prevData) => [...prevData, latestData].slice(-50)); // Keep last 50 data points
+       }
+     } catch (error) {
+       console.error('Error fetching real-time data:', error);
+     }
+   };
+ 
+   useEffect(() => {
+     fetchRealTimeData(); // Fetch first data immediately when the app loads
+ 
+     const interval = setInterval(() => {
+       fetchRealTimeData();
+     }, 5000);
+ 
+   
+     return () => clearInterval(interval);
+   }, []);
+ 
 
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const res = await axios.get('http://localhost:5000/api/latest');
-        const now = new Date().toLocaleTimeString();
-
-        setChartData(prev => ({
-          labels: [...prev.labels.slice(-9), now],
-          datasets: [
-            {
-              label: 'Temperature (°C)',
-              data: [...(prev.datasets[0]?.data || []), res.data.temperature].slice(-10),
-              borderColor: 'red',
-              fill: false
-            },
-            {
-              label: 'Humidity (%)',
-              data: [...(prev.datasets[1]?.data || []), res.data.humidity].slice(-10),
-              borderColor: 'blue',
-              fill: false
-            }
-          ]
-        }));
-
-        setLdrChartData(prev => ({
-          labels: [...prev.labels.slice(-9), now],
-          datasets: [
-            {
-              label: 'Light Intensity (LDR Value)',
-              data: [...(prev.datasets[0]?.data || []), res.data.ldr].slice(-10),
-              borderColor: 'yellow',
-              fill: false
-            }
-          ]
-        }));
-      } catch (err) {
-        console.error('Error fetching data:', err);
-      }
-    };
-
-    fetchData(); // initial fetch
-
-    const interval = setInterval(fetchData, 5000); // fetch every 5 seconds
-    return () => clearInterval(interval); // cleanup
-  }, []);
+ 
 
   return (
     <div className="p-4 bg-blue-300 min-h-screen">
@@ -78,6 +58,7 @@ function App() {
 
       </div>
       <RealTimeMonitor />
+      
 
 
       {showGraph && (
@@ -85,7 +66,6 @@ function App() {
           <Graph
             onClose={() => setShowGraph(false)}
             chartData={chartData}
-            ldrChartData={ldrChartData}
           />
         </div>
       )}
