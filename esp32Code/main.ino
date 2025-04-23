@@ -8,8 +8,8 @@
 #define LIGHT_PIN 2
 #define FAN_PIN 5
 
-#define SERVER_DATA_URL "http://Your-IP/api/data"  // POST here
-#define SERVER_STATE_URL "http://Your-IP/api/latest" // GET here
+#define SERVER_DATA_URL "http://Your-ip:5000/api/data"  // POST here
+#define SERVER_STATE_URL "http://Your-ip:5000/api/latest" // GET here
 
 DHT dht(DHTPIN, DHTTYPE);
 bool manualLight = false;
@@ -18,8 +18,8 @@ bool fanState = false;
 bool lightState = false;
 bool desiredLightState = false;
 
-const char* ssid = "Wi-Fi Name";
-const char* password = "wifi password";
+const char* ssid = "WiFi Name";
+const char* password = "WiFi Password";
 
 void setup() {
   Serial.begin(115200);
@@ -41,82 +41,75 @@ void loop() {
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
   int ldrValue = analogRead(LDR_PIN);
+  // Read back the current state of relay pin
 
-  // 1. First, get latest control states
+  bool isFanConnected = digitalRead(FAN_PIN) == LOW;
+
+  bool isDHTConnected = !(isnan(temperature) || isnan(humidity));
+  bool isLDRConnected = (ldrValue > 10 && ldrValue < 4095);  // crude check
+  
+
+  // 🔐 Only try to fetch commands if at least WiFi is connected
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin(SERVER_STATE_URL); // <-- Fetch control commands from server
+    http.begin(SERVER_STATE_URL);
     int httpCode = http.GET();
     if (httpCode > 0) {
       String response = http.getString();
-      Serial.println("Server Response:");
-      Serial.println(response);
-
-      // Parse JSON manually (since ESP32 is small memory)
       manualFan = response.indexOf("\"fanState\":true") > 0;
-      // manualLight = response.indexOf("\"lightState\":true") > 0;
       manualLight = response.indexOf("\"manualLight\":true") > 0;
       desiredLightState = response.indexOf("\"lightState\":true") > 0;
-    } else {
-      Serial.println("Error fetching control states");
     }
     http.end();
   }
 
-  // 2. Update Devices based on Control Commands
-
-  // Fan Control
-digitalWrite(FAN_PIN, manualFan ? LOW : HIGH);
-  fanState = manualFan; // Update fanState
-
-  // Light Control (auto or manual)
-  // if (!manualLight) {
-  //   if (ldrValue < 1000) { // Dark
-  //     digitalWrite(LIGHT_PIN, HIGH);
-  //     lightState = true;
-  //   } else {
-  //     digitalWrite(LIGHT_PIN, LOW);
-  //     lightState = false;
-  //   }
-  // } else {
-  //   digitalWrite(LIGHT_PIN, HIGH);
-  //   lightState = true;
-  // }
-
-if (manualLight) {
-  // Manual override ON — use user's button state
-  digitalWrite(LIGHT_PIN, desiredLightState ? HIGH : LOW);
-  lightState = desiredLightState;
-} else {
-  // Auto Mode — control based on LDR
-  if (ldrValue < 1000) { // Dark
-    digitalWrite(LIGHT_PIN, HIGH);
-    lightState = true;
+  // 🌡️ Don't control if sensor is disconnected
+  if (isDHTConnected) {
+    digitalWrite(FAN_PIN, manualFan ? LOW : HIGH);
+    fanState = manualFan;
   } else {
-    digitalWrite(LIGHT_PIN, LOW);
-    lightState = false;
+    fanState = false;
+    digitalWrite(FAN_PIN, HIGH);  // Turn OFF fan
   }
-}
 
-  
+  // 💡 Light (auto/manual)
+  if (manualLight) {
+    digitalWrite(LIGHT_PIN, desiredLightState ? HIGH : LOW);
+    lightState = desiredLightState;
+  } else {
+    if (isLDRConnected && ldrValue < 1000) {
+      digitalWrite(LIGHT_PIN, HIGH);
+      lightState = true;
+    } else {
+      digitalWrite(LIGHT_PIN, LOW);
+      lightState = false;
+    }
+  }
 
-  // 3. Send updated sensor values to server
+  // 🛑 If sensor is disconnected, skip sending fake/old data
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin(SERVER_DATA_URL);  // <-- Post data to server
+    http.begin(SERVER_DATA_URL);
     http.addHeader("Content-Type", "application/json");
 
-    String payload = "{\"temperature\":" + String(temperature, 2) + 
-                     ",\"humidity\":" + String(humidity, 2) + 
-                     ",\"ldr\":" + String(ldrValue) + 
-                     ",\"fanState\":" + String(fanState) +
-                     ",\"lightState\":" + String(lightState) + "}";
+    String payload = "{";
+    payload += "\"temperature\":" + String(isDHTConnected ? temperature : 0.0, 2);
+    payload += ",\"humidity\":" + String(isDHTConnected ? humidity : 0.0, 2);
+    payload += ",\"ldr\":" + String(isLDRConnected ? ldrValue : 0);
+    payload += ",\"fanState\":" + String(fanState ? "true" : "false");
+    payload += ",\"lightState\":" + String(lightState ? "true" : "false");
+    payload += ",\"deviceStatus\":{";
+    payload += "\"dht22\":" + String(isDHTConnected ? "true" : "false") + ",";
+    payload += "\"ldr\":" + String(isLDRConnected ? "true" : "false") + ",";
+    payload += "\"fan\":" + String(isFanConnected ? "true" : "false");
+    payload += "}}";
 
-    int httpResponseCode = http.POST(payload);
-    if (httpResponseCode > 0) {
-      Serial.println("Data sent successfully");
+    int response = http.POST(payload);
+    if (response > 0) {
+      Serial.println("Payload Sent: ");
+      Serial.println(payload);
     } else {
-      Serial.println("Error sending data");
+      Serial.println("Failed to send data");
     }
     http.end();
   }
